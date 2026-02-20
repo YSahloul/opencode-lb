@@ -35,6 +35,11 @@ export const COMMANDS: Record<string, { template: string; description?: string }
     description: "Show issue details (issue ID)",
     template: "Run `lb show $ARGUMENTS` and summarize the issue.",
   },
+  "lb:dashboard": {
+    description: "Open the live agent dashboard in your browser",
+    template:
+      'Run `bun run dashboard.ts &` from the opencode-lb plugin directory to start the dashboard server, then run `open http://localhost:3333` to open it in the browser. Tell the user the dashboard is running at http://localhost:3333',
+  },
 }
 
 export const AGENT_CONFIG: Record<string, { description?: string; prompt: string; mode: string }> = {
