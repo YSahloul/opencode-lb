@@ -19,11 +19,81 @@ import {
 } from "./orchestrator"
 import { LB_GUIDANCE, getLbContext } from "./context"
 import { COMMANDS, AGENT_CONFIG } from "./commands"
+import { LifecycleEmitter } from "./lifecycle"
+export type { LifecycleEmitter, LifecycleEventType, LifecyclePayload, LifecycleHandler } from "./lifecycle"
 
 type OpencodeClient = PluginInput["client"]
 
 export const LbPlugin: Plugin = async ({ client, $ }) => {
   const registry = new AgentRegistry()
+  const emitter = new LifecycleEmitter()
+
+  // ── Default toast handlers ──────────────────────────────────────────────
+  emitter.on("agent:claimed", async ({ issueId }) => {
+    await client.tui.showToast({
+      body: {
+        title: `${issueId} claimed`,
+        message: "Background agent starting…",
+        variant: "info",
+        duration: 4000,
+      },
+    })
+  })
+
+  emitter.on("agent:running", async ({ issueId, branch }) => {
+    await client.tui.showToast({
+      body: {
+        title: `${issueId} running`,
+        message: `Agent is live on branch ${branch ?? issueId}.`,
+        variant: "success",
+        duration: 4000,
+      },
+    })
+  })
+
+  emitter.on("agent:finished", async ({ issueId }) => {
+    await client.tui.showToast({
+      body: {
+        title: `${issueId} finished`,
+        message: "Background agent done. Run lb_check or lb_cleanup.",
+        variant: "success",
+        duration: 6000,
+      },
+    })
+  })
+
+  emitter.on("agent:errored", async ({ issueId, error }) => {
+    await client.tui.showToast({
+      body: {
+        title: `${issueId} errored`,
+        message: error ?? "Agent unreachable or crashed.",
+        variant: "error",
+        duration: 8000,
+      },
+    })
+  })
+
+  emitter.on("agent:aborted", async ({ issueId }) => {
+    await client.tui.showToast({
+      body: {
+        title: `${issueId} aborted`,
+        message: "Agent operation aborted.",
+        variant: "warning",
+        duration: 5000,
+      },
+    })
+  })
+
+  emitter.on("agent:closed", async ({ issueId }) => {
+    await client.tui.showToast({
+      body: {
+        title: `${issueId} closed`,
+        message: "Issue marked done.",
+        variant: "success",
+        duration: 4000,
+      },
+    })
+  })
 
   // Reconstruct state from tmux + lb on startup
   await reconstructRegistry($, registry)
@@ -57,7 +127,7 @@ export const LbPlugin: Plugin = async ({ client, $ }) => {
             .describe("Skip worktree creation and run in repo root (for read-only tasks)"),
         },
         async execute(args) {
-          return await dispatch($, registry, args)
+          return await dispatch($, registry, emitter, args)
         },
       }),
 
@@ -95,7 +165,7 @@ export const LbPlugin: Plugin = async ({ client, $ }) => {
           issueId: tool.schema.string().describe("Linear issue ID"),
         },
         async execute(args) {
-          return await abortAgent($, registry, args.issueId)
+          return await abortAgent($, registry, emitter, args.issueId)
         },
       }),
 
@@ -114,7 +184,7 @@ export const LbPlugin: Plugin = async ({ client, $ }) => {
             .describe("Force delete worktree without safety checks"),
         },
         async execute(args) {
-          return await cleanupAgent($, registry, args.issueId, args.status, args.force)
+          return await cleanupAgent($, registry, emitter, args.issueId, args.status, args.force)
         },
       }),
 
@@ -187,7 +257,7 @@ export const LbPlugin: Plugin = async ({ client, $ }) => {
 
       // On session idle, poll background agents and sync
       if (event.type === "session.idle") {
-        await pollBackgroundAgents($, client, registry)
+        await pollBackgroundAgents($, client, registry, emitter)
       }
     },
 
@@ -200,36 +270,47 @@ export const LbPlugin: Plugin = async ({ client, $ }) => {
 }
 
 /**
- * Poll all tracked background agents. Toast on completion.
+ * Poll all tracked background agents. Emit lifecycle events on state changes.
  */
 async function pollBackgroundAgents(
   $: PluginInput["$"],
-  client: OpencodeClient,
+  _client: OpencodeClient,
   registry: AgentRegistry,
+  emitter: LifecycleEmitter,
 ) {
   for (const [issueId, agent] of registry.entries()) {
     try {
       const resp = await fetch(
         `http://localhost:${agent.port}/session/${agent.sessionId}/status`,
       )
-      if (!resp.ok) continue
+      if (!resp.ok) {
+        // Non-OK response — agent may be errored
+        await emitter.emit("agent:errored", {
+          issueId,
+          branch: agent.branch,
+          port: agent.port,
+          error: `HTTP ${resp.status} from agent status endpoint`,
+        })
+        continue
+      }
       const status = await resp.json()
 
       // Check if agent session is idle (done working)
       if (status?.status === "idle" || status?.idle === true) {
-        try {
-          await client.tui.showToast({
-            body: {
-              title: `${issueId} finished`,
-              message: `Background agent done. Run lb_check or lb_cleanup.`,
-              variant: "success",
-              duration: 6000,
-            },
-          })
-        } catch {}
+        await emitter.emit("agent:finished", {
+          issueId,
+          branch: agent.branch,
+          port: agent.port,
+        })
       }
     } catch {
       // Agent not reachable — may have been cleaned up externally
+      await emitter.emit("agent:errored", {
+        issueId,
+        branch: agent.branch,
+        port: agent.port,
+        error: "Agent unreachable — may have been cleaned up externally",
+      })
     }
   }
 

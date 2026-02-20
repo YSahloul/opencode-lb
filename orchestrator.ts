@@ -4,6 +4,7 @@
 
 import type { PluginInput } from "@opencode-ai/plugin"
 import type { AgentRegistry } from "./registry"
+import type { LifecycleEmitter } from "./lifecycle"
 
 type Shell = PluginInput["$"]
 
@@ -84,6 +85,7 @@ async function getSessionStatus(port: number, sessionId: string): Promise<string
 export async function dispatch(
   $: Shell,
   registry: AgentRegistry,
+  emitter: LifecycleEmitter,
   args: {
     issueId: string
     prompt: string
@@ -123,6 +125,7 @@ export async function dispatch(
 
     // 1. Claim the issue
     await $`lb update ${issueId} --status in_progress`.quiet()
+    await emitter.emit("agent:claimed", { issueId, branch })
 
     let wtPath: string
 
@@ -183,6 +186,9 @@ export async function dispatch(
       dispatchedAt: new Date().toISOString(),
     }
     registry.set(issueId, entry)
+
+    // 10. Emit running event — serve is up and session created
+    await emitter.emit("agent:running", { issueId, branch, port })
 
     return JSON.stringify({ status: "dispatched", ...entry })
   } catch (e: any) {
@@ -353,6 +359,7 @@ export async function followupAgent(
 export async function abortAgent(
   $: Shell,
   registry: AgentRegistry,
+  emitter: LifecycleEmitter,
   issueId: string,
 ): Promise<string> {
   const agent = registry.get(issueId)
@@ -365,6 +372,10 @@ export async function abortAgent(
       `http://localhost:${agent.port}/session/${agent.sessionId}/abort`,
       { method: "POST" },
     )
+
+    if (resp.ok) {
+      await emitter.emit("agent:aborted", { issueId, branch: agent.branch, port: agent.port })
+    }
 
     return JSON.stringify({
       status: resp.ok ? "aborted" : "failed",
@@ -387,6 +398,7 @@ export async function abortAgent(
 export async function cleanupAgent(
   $: Shell,
   registry: AgentRegistry,
+  emitter: LifecycleEmitter,
   issueId: string,
   status?: string,
   force?: boolean,
@@ -432,16 +444,23 @@ export async function cleanupAgent(
     results.push(`status update failed: ${e?.message || e}`)
   }
 
-  // 4. Sync
+  // 4. Emit lifecycle event based on final status
+  if (newStatus === "in_review") {
+    await emitter.emit("agent:finished", { issueId, branch: agent.branch, port: agent.port })
+  } else if (newStatus === "done") {
+    await emitter.emit("agent:closed", { issueId, branch: agent.branch, port: agent.port })
+  }
+
+  // 5. Sync
   try {
     await $`lb sync`.quiet()
     results.push("synced")
   } catch {}
 
-  // 5. Remove from registry
+  // 6. Remove from registry
   registry.delete(issueId)
 
-  // 6. Clean up log file
+  // 7. Clean up log file
   try {
     await $`rm -f /tmp/opencode-${issueId}.log`.quiet()
   } catch {}
