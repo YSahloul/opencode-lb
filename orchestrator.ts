@@ -8,8 +8,78 @@ import type { AgentRegistry } from "./registry"
 type Shell = PluginInput["$"]
 
 /**
+ * Fetch the issue description from lb show --json.
+ */
+async function getIssueDescription($: Shell, issueId: string): Promise<string> {
+  try {
+    const json = await $`lb show ${issueId} --json`.quiet().text()
+    const issue = JSON.parse(json.trim())
+    return issue.description || issue.title || ""
+  } catch {
+    // Fallback to non-json
+    try {
+      return (await $`lb show ${issueId}`.quiet().text()).trim()
+    } catch {
+      return ""
+    }
+  }
+}
+
+/**
+ * Get git diff stat for a worktree to show additions/deletions.
+ */
+async function getGitDiffStat($: Shell, worktreePath: string): Promise<string | null> {
+  try {
+    const stat = (
+      await $`git -C ${worktreePath} diff --stat HEAD`.quiet().nothrow().text()
+    ).trim()
+    return stat || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Determine the actual session status from the opencode serve API.
+ * Returns: "running" | "idle" | "finished" | "unreachable"
+ */
+async function getSessionStatus(port: number, sessionId: string): Promise<string> {
+  try {
+    // Check session messages to see if there's active generation
+    const resp = await fetch(
+      `http://localhost:${port}/session/${sessionId}/message`,
+    )
+    if (!resp.ok) return "unreachable"
+
+    const messages = (await resp.json()) as any[]
+    if (messages.length === 0) return "idle"
+
+    // Check the last message — if it's from the assistant and complete, the agent is idle
+    const lastMsg = messages[messages.length - 1]
+    const role = lastMsg?.info?.role || lastMsg?.role
+    const status = lastMsg?.info?.status || lastMsg?.status
+
+    if (role === "assistant" && (status === "completed" || status === "done")) {
+      return "finished"
+    }
+    if (role === "assistant" && status === "streaming") {
+      return "running"
+    }
+    // If last message is from user, agent is processing
+    if (role === "user") {
+      return "running"
+    }
+
+    return "idle"
+  } catch {
+    return "unreachable"
+  }
+}
+
+/**
  * Dispatch an issue to a background worktree agent.
  * Creates worktree, launches opencode serve in tmux, sends the prompt.
+ * Auto-injects the issue description into the prompt.
  */
 export async function dispatch(
   $: Shell,
@@ -20,9 +90,10 @@ export async function dispatch(
     model?: string
     provider?: string
     slug?: string
+    skipWorktree?: boolean
   },
 ): Promise<string> {
-  const { issueId, prompt, model, provider, slug } = args
+  const { issueId, prompt, model, provider, slug, skipWorktree } = args
   const modelId = model || "claude-sonnet-4-6"
   const providerId = provider || "anthropic"
 
@@ -44,16 +115,29 @@ export async function dispatch(
   }
 
   try {
+    // 0. Auto-inject issue description into prompt
+    const issueDesc = await getIssueDescription($, issueId)
+    const fullPrompt = issueDesc
+      ? `## Issue: ${issueId}\n\n${issueDesc}\n\n---\n\n${prompt}`
+      : prompt
+
     // 1. Claim the issue
     await $`lb update ${issueId} --status in_progress`.quiet()
 
-    // 2. Create worktree
-    await $`lb worktree create ${branch}`.quiet()
+    let wtPath: string
 
-    // 3. Resolve worktree path (sibling of current repo root)
-    const repoRoot = (await $`git rev-parse --show-toplevel`.quiet().text()).trim()
-    const parentDir = (await $`dirname ${repoRoot}`.quiet().text()).trim()
-    const wtPath = `${parentDir}/${branch}`
+    if (skipWorktree) {
+      // Use repo root directly (read-only tasks)
+      wtPath = (await $`git rev-parse --show-toplevel`.quiet().text()).trim()
+    } else {
+      // 2. Create worktree
+      await $`lb worktree create ${branch}`.quiet()
+
+      // 3. Resolve worktree path (sibling of current repo root)
+      const repoRoot = (await $`git rev-parse --show-toplevel`.quiet().text()).trim()
+      const parentDir = (await $`dirname ${repoRoot}`.quiet().text()).trim()
+      wtPath = `${parentDir}/${branch}`
+    }
 
     // 4. Launch opencode serve in tmux
     const logFile = `/tmp/opencode-${issueId}.log`
@@ -74,12 +158,12 @@ export async function dispatch(
     const sessionData = (await sessionResp.json()) as { id: string }
     const sessionId = sessionData.id
 
-    // 7. Send the task prompt
+    // 7. Send the task prompt (with auto-injected issue description)
     await fetch(`http://localhost:${port}/session/${sessionId}/prompt_async`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        parts: [{ type: "text", text: prompt }],
+        parts: [{ type: "text", text: fullPrompt }],
         model: { providerID: providerId, modelID: modelId },
       }),
     })
@@ -94,7 +178,7 @@ export async function dispatch(
       port,
       sessionId,
       tmuxSession,
-      branch,
+      branch: skipWorktree ? "(no worktree)" : branch,
       worktreePath: wtPath,
       dispatchedAt: new Date().toISOString(),
     }
@@ -134,7 +218,7 @@ async function waitForPort($: Shell, logFile: string, timeoutMs = 30000): Promis
 }
 
 /**
- * Check on a background agent — fetch recent messages.
+ * Check on a background agent — fetch recent messages, status, and diff stats.
  */
 export async function checkAgent(
   $: Shell,
@@ -144,7 +228,6 @@ export async function checkAgent(
 ): Promise<string> {
   const agent = registry.get(issueId)
   if (!agent) {
-    // Try to reconstruct from lb issue description
     return JSON.stringify({
       status: "not_found",
       issueId,
@@ -154,14 +237,25 @@ export async function checkAgent(
 
   try {
     const limit = lines || 10
+
+    // Get actual session status (running/idle/finished/unreachable)
+    const sessionStatus = await getSessionStatus(agent.port, agent.sessionId)
+
+    // Get git diff stat if worktree exists
+    let diffStat: string | null = null
+    if (agent.worktreePath) {
+      diffStat = await getGitDiffStat($, agent.worktreePath)
+    }
+
     const resp = await fetch(
-      `http://localhost:${agent.port}/session/${agent.sessionId}/message?limit=${limit}`,
+      `http://localhost:${agent.port}/session/${agent.sessionId}/message`,
     )
     if (!resp.ok) {
       return JSON.stringify({
-        status: "unreachable",
+        status: sessionStatus,
         issueId,
         httpStatus: resp.status,
+        diffStat,
         agent,
       })
     }
@@ -181,11 +275,12 @@ export async function checkAgent(
       .slice(-limit)
 
     return JSON.stringify({
-      status: "running",
+      status: sessionStatus,
       issueId,
       port: agent.port,
       tmux: agent.tmuxSession,
       branch: agent.branch,
+      diffStat,
       recentMessages: texts,
     })
   } catch (e: any) {
@@ -287,6 +382,7 @@ export async function abortAgent(
 
 /**
  * Clean up a background agent: kill tmux, delete worktree, update lb status.
+ * Defaults to force-delete worktree to avoid branch-in-use errors.
  */
 export async function cleanupAgent(
   $: Shell,
@@ -302,6 +398,9 @@ export async function cleanupAgent(
 
   const results: string[] = []
 
+  // Default force to true to handle branch-in-use errors
+  const shouldForce = force !== false
+
   // 1. Kill tmux session
   try {
     await $`tmux kill-session -t ${agent.tmuxSession}`.quiet()
@@ -310,16 +409,18 @@ export async function cleanupAgent(
     results.push("tmux already gone")
   }
 
-  // 2. Delete worktree
-  try {
-    if (force) {
-      await $`lb worktree delete ${agent.branch} --force`.quiet()
-    } else {
-      await $`lb worktree delete ${agent.branch}`.quiet()
+  // 2. Delete worktree (skip if no worktree was created)
+  if (agent.branch !== "(no worktree)") {
+    try {
+      if (shouldForce) {
+        await $`lb worktree delete ${agent.branch} --force`.quiet()
+      } else {
+        await $`lb worktree delete ${agent.branch}`.quiet()
+      }
+      results.push("worktree deleted")
+    } catch (e: any) {
+      results.push(`worktree delete failed: ${e?.message || e}`)
     }
-    results.push("worktree deleted")
-  } catch (e: any) {
-    results.push(`worktree delete failed: ${e?.message || e}`)
   }
 
   // 3. Update lb status
@@ -362,26 +463,21 @@ export async function listAgents(
   const agents: any[] = []
 
   for (const [issueId, agent] of registry.entries()) {
-    let reachable = false
-    let sessionStatus = "unknown"
+    // Get actual session status
+    const sessionStatus = await getSessionStatus(agent.port, agent.sessionId)
 
-    try {
-      const resp = await fetch(
-        `http://localhost:${agent.port}/session/${agent.sessionId}/status`,
-      )
-      if (resp.ok) {
-        reachable = true
-        const data = (await resp.json()) as any
-        sessionStatus = data?.status || (data?.idle ? "idle" : "running")
-      }
-    } catch {}
-
-    // Also check tmux
+    // Check tmux
     let tmuxAlive = false
     try {
       await $`tmux has-session -t ${agent.tmuxSession}`.quiet()
       tmuxAlive = true
     } catch {}
+
+    // Get diff stat
+    let diffStat: string | null = null
+    if (agent.worktreePath) {
+      diffStat = await getGitDiffStat($, agent.worktreePath)
+    }
 
     agents.push({
       issueId,
@@ -389,9 +485,10 @@ export async function listAgents(
       sessionId: agent.sessionId,
       tmux: agent.tmuxSession,
       branch: agent.branch,
-      reachable,
+      reachable: sessionStatus !== "unreachable",
       tmuxAlive,
       sessionStatus,
+      diffStat,
       dispatchedAt: agent.dispatchedAt,
     })
   }

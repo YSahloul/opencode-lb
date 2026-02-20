@@ -51,6 +51,10 @@ export const LbPlugin: Plugin = async ({ client, $ }) => {
             .string()
             .optional()
             .describe("Short slug for branch name (default: derived from issue title)"),
+          skipWorktree: tool.schema
+            .boolean()
+            .optional()
+            .describe("Skip worktree creation and run in repo root (for read-only tasks)"),
         },
         async execute(args) {
           return await dispatch($, registry, args)
