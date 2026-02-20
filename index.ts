@@ -95,6 +95,16 @@ export const LbPlugin: Plugin = async ({ client, $ }) => {
     })
   })
 
+  // ── Sound handlers ───────────────────────────────────────────────────
+  const sound = (file: string) => $`afplay /System/Library/Sounds/${file}`.quiet().nothrow()
+
+  emitter.on("agent:claimed", async () => { await sound("Tink.aiff") })
+  emitter.on("agent:running", async () => { await sound("Pop.aiff") })
+  emitter.on("agent:finished", async () => { await sound("Hero.aiff") })
+  emitter.on("agent:errored", async () => { await sound("Basso.aiff") })
+  emitter.on("agent:aborted", async () => { await sound("Funk.aiff") })
+  emitter.on("agent:closed", async () => { await sound("Glass.aiff") })
+
   // Reconstruct state from tmux + lb on startup
   await reconstructRegistry($, registry)
 
