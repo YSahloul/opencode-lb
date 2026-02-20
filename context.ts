@@ -36,6 +36,26 @@ Use the bash tool to run lb commands.
 
 Use \`--json\` flag for structured output when parsing programmatically.
 
+## Issue Refinement (CRITICAL STEP)
+
+**An issue MUST be refined before it can be dispatched.** Unrefined issues produce bad work. The refinement step is what makes background agents effective.
+
+**Pipeline:** \`todo_needs_refinement\` → (refine) → \`todo_refined\` → (dispatch) → \`in_progress\`
+
+**To refine an issue:**
+1. \`lb refine\` — list issues needing refinement
+2. \`lb refine <ID>\` — see the issue + refinement checklist
+3. Read the codebase to understand what needs to change
+4. Update the issue description with:
+   - **Context:** Why this matters, current vs desired behavior
+   - **Technical Approach:** Which files/modules change, implementation strategy
+   - **Acceptance Criteria:** Concrete testable conditions that define "done"
+   - **Dependencies & Risks:** Blockers, unknowns, complexity estimate
+   - **Subtasks** (if needed): \`lb create "Step: ..." --parent <ID>\`
+5. \`lb update <ID> --status todo_refined\` — marks it ready for dispatch
+
+**The description you write IS the prompt the background agent works from. If the refinement is vague, the agent will produce vague work. Be specific: name the files, describe the changes, define what "done" looks like.**
+
 ## Background Agent Orchestration
 
 You have these tools for managing parallel background agents:
@@ -49,12 +69,14 @@ You have these tools for managing parallel background agents:
 
 **Workflow:**
 1. \`lb ready\` to find work
-2. \`lb_dispatch\` with issue ID + prompt to spin up a background agent
-3. \`lb_agents\` or \`lb_check\` to monitor progress
-4. \`lb_followup\` if the agent needs course correction
-5. \`lb_cleanup\` when done (sets status to in_review by default)
+2. **Refine first** if the issue is \`todo_needs_refinement\` — run \`lb refine <ID>\` and follow the checklist
+3. \`lb_dispatch\` with issue ID + prompt to spin up a background agent
+4. \`lb_agents\` or \`lb_check\` to monitor progress
+5. \`lb_followup\` if the agent needs course correction
+6. \`lb_cleanup\` when done (sets status to in_review by default)
 
 **Rules:**
+- **NEVER dispatch an unrefined issue** — refine it first or the background agent will fail
 - Always include the lb issue description in the dispatch prompt
 - Include instructions to commit, push, create PR, and run \`lb update <ID> --status in_review\`
 - The dispatch prompt should be self-contained — the background agent has no context from this session
