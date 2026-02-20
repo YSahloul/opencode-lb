@@ -346,6 +346,31 @@ const HTML = `<!DOCTYPE html>
   }
   .done-toggle:hover { color: #666; }
   .collapsed { display: none; }
+  .btn-tmux {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 3px 8px;
+    margin-top: 6px;
+    background: #1a2a1a;
+    color: #4ade80;
+    border: 1px solid #2a3a2a;
+    border-radius: 4px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .btn-tmux:hover { background: #2a3a2a; border-color: #4ade80; }
+  .card-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .project-divider {
+    border: none;
+    border-top: 1px solid #1a1a1a;
+    margin: 24px 0 0;
+  }
 </style>
 </head>
 <body>
@@ -391,6 +416,14 @@ function esc(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
 }
 
+function openTmux(session) {
+  fetch('/api/tmux', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: session })
+  })
+}
+
 function renderCard(issue) {
   const a = issue.agent
   const isActive = issue.status === 'in_progress'
@@ -402,6 +435,9 @@ function renderCard(issue) {
       ' &middot; <span class="label">port:</span> <span class="val">' + a.port + '</span>' +
       ' &middot; <span class="label">msgs:</span> <span class="val">' + a.messageCount + '</span>' +
       (a.lastMessage ? '<div class="last-msg">' + esc(a.lastMessage) + '</div>' : '') +
+      '</div>' +
+      '<div class="card-actions">' +
+        '<span class="btn-tmux" onclick="openTmux(\\'' + esc(a.tmux) + '\\')">open tmux</span>' +
       '</div>'
   }
   return '<div class="card' + (isActive ? ' active-card' : '') + '">' +
@@ -489,6 +525,7 @@ async function refresh() {
         html += '</div></div>'
       })
 
+      html += '<hr class="project-divider">'
       html += '</div>'
     })
 
@@ -518,6 +555,27 @@ Bun.serve({
       return new Response(JSON.stringify(state), {
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
       })
+    }
+
+    // Open tmux session in a new Terminal.app window
+    if (url.pathname === "/api/tmux" && req.method === "POST") {
+      try {
+        const body = await req.json() as { session: string }
+        const session = body.session?.replace(/[^a-zA-Z0-9_-]/g, "")
+        if (!session) return new Response("missing session", { status: 400 })
+        // Open a new Terminal window that attaches to the tmux session
+        Bun.spawn(["osascript", "-e",
+          `tell application "Terminal"
+            activate
+            do script "tmux attach-session -t ${session}"
+          end tell`
+        ])
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "Content-Type": "application/json" },
+        })
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: e?.message }), { status: 500 })
+      }
     }
 
     return new Response(HTML, {
