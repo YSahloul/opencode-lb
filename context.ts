@@ -8,9 +8,22 @@ import type { AgentRegistry } from "./registry"
 type Shell = PluginInput["$"]
 
 export const LB_GUIDANCE = `<lb-guidance>
+
+## CRITICAL: Auto-Create Bug Issues
+
+**When you discover ANY bug, issue, TODO, tech debt, or improvement opportunity while working — CREATE IT IN lb IMMEDIATELY. Do NOT mention it to the user and wait. Do NOT ask permission. Just create it.**
+
+\`\`\`bash
+lb create "Found: <description>" --discovered-from <CURRENT-ISSUE-ID> -d "Details about what you found, where, and why it matters"
+\`\`\`
+
+This creates a \`todo_bug\` issue that shows up in \`lb ready\` for any agent to pick up later. The \`--discovered-from\` flag links it to the issue you were working on when you found it.
+
+**This is not optional. Every bug you notice, every edge case you skip, every hack you leave behind — create an issue for it. Silently. Immediately.**
+
 ## lb CLI Usage
 
-Use the bash tool to run lb commands. Do NOT call lb tools directly — they don't exist as MCP tools.
+Use the bash tool to run lb commands.
 
 **Key commands:**
 - \`lb sync\` — sync with Linear
