@@ -1,5 +1,12 @@
 /**
- * Context injection — lb state injected into sessions.
+ * Context injection — the single source of truth for lb agent instructions.
+ *
+ * This replaces AGENTS.md as the authoritative lb reference. The plugin injects
+ * this on every session start and after every compaction, so agents always have
+ * current instructions + live state. No static files to drift out of sync.
+ *
+ * Design inspired by beads' `bd prime` — one dynamic injection point that
+ * adapts to current state, replaces scattered static docs.
  */
 
 import type { PluginInput } from "@opencode-ai/plugin"
@@ -7,15 +14,24 @@ import type { AgentRegistry } from "./registry"
 
 type Shell = PluginInput["$"]
 
+// ─── Static guidance: everything an agent needs to know about lb ──────────
+
 export const LB_GUIDANCE = `<lb-guidance>
 
-## MANDATORY: All Work Flows Through lb
+## CRITICAL: All Work Flows Through lb
 
-**NEVER do any work without an lb issue. No exceptions. No built-in todo tools. Only lb.**
+> **DO NOT use built-in todo/task tracking tools. EVER.**
+> No todo lists, no task trackers, no scratchpads — ONLY \`lb\`.
+> \`lb\` IS your todo list. There is no other.
 
-### Status Pipeline
+### Session Start (MANDATORY)
 
-Every issue flows through these statuses in order:
+\`\`\`bash
+lb sync        # Pull latest issues from Linear
+lb ready       # See what's available to work on
+\`\`\`
+
+### Issue Pipeline
 
 \`\`\`
 todo_needs_refinement → todo_refined → in_progress → in_review → done
@@ -23,121 +39,130 @@ todo_needs_refinement → todo_refined → in_progress → in_review → done
                       todo_bug
 \`\`\`
 
-| Status | Meaning | How it gets here |
-|--------|---------|-----------------|
-| \`todo_needs_refinement\` | New idea, not ready to work on | \`lb create "title"\` |
-| \`todo_refined\` | Has details, ready to pick up | \`lb update ID --status todo_refined\` |
-| \`todo_bug\` | Bug found while working, ready to pick up | \`lb create "Found: ..." --discovered-from ID\` |
-| \`in_progress\` | Actively being worked on | \`lb update ID --status in_progress\` |
-| \`in_review\` | PR open, waiting for review | \`lb update ID --status in_review\` |
-| \`done\` | Complete | \`lb close ID --reason "why"\` |
+| Status | Meaning |
+|--------|---------|
+| \`todo_needs_refinement\` | New idea — needs details before anyone can work on it |
+| \`todo_refined\` | Has details, ready to pick up (shown by \`lb ready\`) |
+| \`todo_bug\` | Bug found while working (shown by \`lb ready\`) |
+| \`in_progress\` | Actively being worked on |
+| \`in_review\` | PR open, waiting for review |
+| \`done\` | Complete |
 
-**\`lb ready\` only shows \`todo_refined\` and \`todo_bug\` issues.** Nothing else is visible. If you create an issue with \`lb create\`, it starts at \`todo_needs_refinement\` and is INVISIBLE to \`lb ready\` until you refine it.
+**\`lb ready\` ONLY shows \`todo_refined\` and \`todo_bug\`.** If you \`lb create\` an issue, it starts at \`todo_needs_refinement\` and is INVISIBLE until refined.
 
-### Session Start (MANDATORY)
+### Two Paths Into the Pipeline
 
-Run these commands at the start of EVERY session:
+**Path 1 — New work:**
+1. \`lb create "title" -d "details"\` → starts at \`todo_needs_refinement\`
+2. \`lb refine ID\` → see refinement checklist
+3. Add implementation details, acceptance criteria
+4. \`lb update ID --status todo_refined\` → now visible in \`lb ready\`
 
-\`\`\`bash
-lb sync
-lb ready
-\`\`\`
-
-### Creating and Refining Issues
-
-**To create an issue:**
-\`\`\`bash
-lb create "title" -d "description"
-\`\`\`
-This creates it at \`todo_needs_refinement\`. It is NOT ready to work on yet.
-
-**To make it workable, you MUST refine it:**
-1. \`lb refine ID\` — see the issue + refinement checklist
-2. Add implementation details: what files change, what the approach is, what "done" looks like
-3. \`lb update ID --status todo_refined\` — NOW it shows up in \`lb ready\`
-
-**If the user asks you to do work and no issue exists:**
-1. \`lb create "title" -d "details"\` — create the issue
-2. \`lb update ID --status todo_refined\` — refine it (add details if needed)
-3. \`lb update ID --status in_progress\` — claim it
-4. Do the work
-5. \`lb update ID --status in_review\` — when PR is opened, or work is done pending review
-
-**Shortcut for bugs found while working:**
+**Path 2 — Bug found while working:**
 \`\`\`bash
 lb create "Found: <description>" --discovered-from <CURRENT-ISSUE-ID> -d "Details..."
 \`\`\`
-This goes straight to \`todo_bug\` and shows up in \`lb ready\` immediately.
+Goes straight to \`todo_bug\` → visible in \`lb ready\` immediately.
+
+**Create bugs IMMEDIATELY when you discover them. Do not wait. Do not ask permission.**
 
 ### Doing Work
 
-1. Pick an issue from \`lb ready\`
-2. \`lb show ID\` — read the full description
-3. \`lb update ID --status in_progress\` — claim it
-4. Do the work (use worktrees for coding: \`lb worktree create ID-slug\`)
-5. When done: \`lb update ID --status in_review\`
-6. When merged: \`lb close ID --reason "what was done"\`
+1. \`lb ready\` → pick an issue
+2. \`lb show ID\` → read the full description
+3. \`lb update ID --status in_progress\` → claim it
+4. Do the work
+5. \`lb update ID --status in_review\` → when PR is opened or work is done
+6. \`lb sync\` → before ending session
+
+### Worktree Sessions
+
+If your branch name starts with an issue ID (e.g. \`AGE-99-fix-auth\`), you are a **worktree agent**.
+
+1. \`lb sync\`
+2. Extract issue ID from branch name
+3. \`lb show ID\` → read the issue
+4. \`lb update ID --status in_progress\`
+5. Implement the work
+6. Open PR, then \`lb update ID --status in_review\`
+
+### Planning (SUBISSUES, NOT BUILT-IN TODOS)
+
+Break down tasks as lb subissues:
+
+\`\`\`bash
+lb create "Step 1: Do X" --parent LIN-XXX -d "Details..."
+lb create "Step 2: Do Y" --parent LIN-XXX -d "Details..."
+lb create "Step 3: Do Z" --parent LIN-XXX --blocked-by LIN-YYY
+\`\`\`
+
+### Dependencies
+
+\`\`\`bash
+lb create "Must do first" --blocks LIN-123
+lb create "Depends on auth" --blocked-by LIN-100
+lb dep add LIN-A --blocks LIN-B
+lb dep tree LIN-A
+\`\`\`
 
 ### Background Agent Orchestration
 
-Tools for managing parallel background agents:
+Tools for parallel background agents:
 
-- **lb_dispatch** — Dispatch issue to background agent (creates worktree, launches opencode serve, sends prompt)
-- **lb_check** — Check what a background agent is doing
-- **lb_followup** — Send follow-up instructions to a running agent
-- **lb_abort** — Abort agent's current operation
-- **lb_cleanup** — Kill tmux, delete worktree, update lb status
-- **lb_agents** — List all running background agents
+| Tool | Purpose |
+|------|---------|
+| \`lb_dispatch\` | Dispatch issue to background agent (creates worktree, launches server, sends prompt) |
+| \`lb_check\` | Check what a background agent is doing |
+| \`lb_followup\` | Send follow-up instructions to a running agent |
+| \`lb_abort\` | Abort agent's current operation |
+| \`lb_cleanup\` | Kill tmux, delete worktree, update status |
+| \`lb_agents\` | List all running background agents |
 
 **Dispatch workflow:**
-1. Issue MUST be \`todo_refined\` before dispatch — \`lb ready\` to find work
+1. Issue MUST be \`todo_refined\` first — \`lb ready\` to find work
 2. \`lb_dispatch\` with issue ID + detailed prompt
 3. \`lb_check\` or \`lb_agents\` to monitor
-4. \`lb_followup\` if agent needs correction
-5. \`lb_cleanup\` when done
-
-### Rules
-
-1. **NEVER work without an lb issue** — create one first, move it through the pipeline
-2. **NEVER use built-in todo/task tools** — only lb
-3. **NEVER dispatch an unrefined issue** — refine it first
-4. **Always \`lb sync\` then \`lb ready\`** at session start
-5. **Always \`lb show ID\`** before starting work
-6. **Create bug issues immediately** when discovered — use \`--discovered-from\`
-7. **Set \`in_review\` when opening a PR**, not \`done\`
-8. **Always \`lb sync\`** before ending a session
+4. \`lb_cleanup\` when done (defaults to \`in_review\`)
 
 ### Key Commands
 
 | Command | Purpose |
 |---------|---------|
 | \`lb sync\` | Sync with Linear |
-| \`lb ready\` | Show unblocked \`todo_refined\` + \`todo_bug\` issues |
+| \`lb ready\` | Show unblocked ready issues |
 | \`lb refine\` | List issues needing refinement |
 | \`lb refine ID\` | Show issue + refinement checklist |
-| \`lb blocked\` | Show blocked issues with blockers |
-| \`lb show ID\` | Full issue details + relationships |
-| \`lb create "Title" -d "..."\` | Create issue (defaults to \`todo_needs_refinement\`) |
-| \`lb create "Title" -l label\` | Create with label |
+| \`lb blocked\` | Show blocked issues |
+| \`lb show ID\` | Full issue details |
+| \`lb create "Title" -d "..."\` | Create issue |
 | \`lb create "Title" --parent ID\` | Create subtask |
-| \`lb update ID --status in_progress\` | Claim work |
-| \`lb update ID --status in_review\` | PR opened |
-| \`lb update ID --status todo_refined\` | Refinement done |
+| \`lb create "Title" --discovered-from ID\` | Create bug (goes to \`todo_bug\`) |
+| \`lb update ID --status <s>\` | Update status |
 | \`lb update ID --label name\` | Add label |
-| \`lb update ID --unlabel name\` | Remove label |
-| \`lb list --status todo_refined\` | Filter by status |
-| \`lb list --label name\` | Filter by label |
 | \`lb close ID --reason "why"\` | Mark done |
 | \`lb dep add ID --blocks OTHER\` | Add dependency |
 | \`lb dep tree ID\` | Show dependency tree |
-| \`lb worktree create BRANCH\` | Create worktree (full setup) |
-| \`lb worktree delete BRANCH\` | Remove worktree (safety checks) |
-| \`lb worktree list\` | List active worktrees |
+| \`lb worktree create BRANCH\` | Create worktree |
+| \`lb worktree delete BRANCH\` | Remove worktree |
+| \`lb list --status <s>\` | Filter issues |
+
+### Rules
+
+1. **NEVER use built-in todo tools** — only \`lb\`. No exceptions.
+2. **Always \`lb sync\` then \`lb ready\`** at session start.
+3. **Always \`lb show ID\`** before starting work.
+4. **Create bug issues immediately** — use \`--discovered-from\`.
+5. **Set \`in_review\` when opening a PR**, not \`done\`.
+6. **Always \`lb sync\`** before ending a session.
+7. **Memory is ephemeral.** Offload everything to \`lb\` tickets — decisions, context, blockers, checkpoints. \`lb\` is your persistent brain.
 
 </lb-guidance>`
 
+// ─── Dynamic context: live state injected alongside guidance ──────────────
+
 /**
- * Build lb context string with ready issues and running agents.
+ * Build dynamic lb context — ready issues, in-progress work, running agents.
+ * Includes warnings when the agent appears to not be following the pipeline.
  */
 export async function getLbContext(
   $: Shell,
@@ -147,24 +172,30 @@ export async function getLbContext(
     let context = "<lb-context>\n"
 
     // Ready issues
+    let readyCount = 0
     try {
       const ready = (await $`lb ready --json`.quiet().text()).trim()
       if (ready && ready !== "[]") {
-        context += `## Ready Issues\n${ready}\n\n`
+        const parsed = JSON.parse(ready)
+        readyCount = Array.isArray(parsed) ? parsed.length : 0
+        context += `## Ready Issues (${readyCount})\n${ready}\n\n`
       } else {
         context += "## Ready Issues\nNone\n\n"
       }
     } catch {
-      context += "## Ready Issues\n(lb ready failed)\n\n"
+      context += "## Ready Issues\n(lb ready failed — run lb sync)\n\n"
     }
 
     // In-progress issues
+    let inProgressCount = 0
     try {
       const inProgress = (
         await $`lb list --status in_progress --json`.quiet().text()
       ).trim()
       if (inProgress && inProgress !== "[]") {
-        context += `## In Progress\n${inProgress}\n\n`
+        const parsed = JSON.parse(inProgress)
+        inProgressCount = Array.isArray(parsed) ? parsed.length : 0
+        context += `## In Progress (${inProgressCount})\n${inProgress}\n\n`
       }
     } catch {}
 
@@ -175,6 +206,13 @@ export async function getLbContext(
         context += `- ${issueId}: port=${agent.port}, tmux=${agent.tmuxSession}, branch=${agent.branch}\n`
       }
       context += "\n"
+    }
+
+    // Warnings — nudge agents that aren't following the pipeline
+    if (inProgressCount === 0 && readyCount > 0) {
+      context += `## ⚠ WARNING\nYou have ${readyCount} ready issue(s) but nothing in progress. Run \`lb ready\`, pick one, and \`lb update ID --status in_progress\` before doing any work.\n\n`
+    } else if (inProgressCount === 0 && readyCount === 0) {
+      context += `## Note\nNo ready issues and nothing in progress. Run \`lb sync\` to refresh, or create new work with \`lb create\`.\n\n`
     }
 
     context += "</lb-context>"
