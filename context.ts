@@ -112,14 +112,27 @@ Tools for managing parallel background agents:
 | Command | Purpose |
 |---------|---------|
 | \`lb sync\` | Sync with Linear |
-| \`lb ready\` | Show workable issues (todo_refined + todo_bug) |
+| \`lb ready\` | Show unblocked \`todo_refined\` + \`todo_bug\` issues |
 | \`lb refine\` | List issues needing refinement |
 | \`lb refine ID\` | Show issue + refinement checklist |
-| \`lb show ID\` | Full issue details |
-| \`lb create "Title" -d "..."\` | Create issue (starts at todo_needs_refinement) |
-| \`lb update ID --status <status>\` | Move issue through pipeline |
+| \`lb blocked\` | Show blocked issues with blockers |
+| \`lb show ID\` | Full issue details + relationships |
+| \`lb create "Title" -d "..."\` | Create issue (defaults to \`todo_needs_refinement\`) |
+| \`lb create "Title" -l label\` | Create with label |
+| \`lb create "Title" --parent ID\` | Create subtask |
+| \`lb update ID --status in_progress\` | Claim work |
+| \`lb update ID --status in_review\` | PR opened |
+| \`lb update ID --status todo_refined\` | Refinement done |
+| \`lb update ID --label name\` | Add label |
+| \`lb update ID --unlabel name\` | Remove label |
+| \`lb list --status todo_refined\` | Filter by status |
+| \`lb list --label name\` | Filter by label |
 | \`lb close ID --reason "why"\` | Mark done |
-| \`lb list --status <s> --json\` | Filter/list issues |
+| \`lb dep add ID --blocks OTHER\` | Add dependency |
+| \`lb dep tree ID\` | Show dependency tree |
+| \`lb worktree create BRANCH\` | Create worktree (full setup) |
+| \`lb worktree delete BRANCH\` | Remove worktree (safety checks) |
+| \`lb worktree list\` | List active worktrees |
 
 </lb-guidance>`
 
