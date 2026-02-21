@@ -529,7 +529,7 @@ async function refresh() {
       html += '</div>'
     })
 
-    if (!html) html = '<div class="empty">No projects found. Run lb onboard in a project to get started.</div>'
+    if (!html) html = '<div class="empty">No projects found. Run lb init in a project to get started.</div>'
     document.getElementById('projects').innerHTML = html
     document.getElementById('meta').textContent = 'Last updated: ' + new Date().toLocaleTimeString() +
       ' \\u00b7 ' + projects.length + ' projects \\u00b7 polling every 3s'

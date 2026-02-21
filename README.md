@@ -27,7 +27,7 @@ lb_dispatch("AGE-42", prompt)
 - [OpenCode](https://opencode.ai) CLI
 - [linear-beads](https://github.com/nikvdp/linear-beads) (`lb`) installed and configured
 - [tmux](https://github.com/tmux/tmux)
-- `lb onboard` run in your project
+- `lb init` run in your project
 
 ### Local (development)
 
