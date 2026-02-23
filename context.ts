@@ -171,10 +171,31 @@ export async function getLbContext(
   try {
     let context = "<lb-context>\n"
 
+    // Helper: run lb with a timeout to prevent zombie processes
+    const lbWithTimeout = async (args: string[], timeoutMs = 15000): Promise<string> => {
+      const proc = Bun.spawn(["lb", ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, LB_TIMEOUT_MS: String(timeoutMs) },
+      })
+      const result = await Promise.race([
+        proc.exited.then(async () => {
+          return new TextDecoder().decode(await new Response(proc.stdout).arrayBuffer())
+        }),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            proc.kill()
+            reject(new Error("lb subprocess timed out"))
+          }, timeoutMs)
+        }),
+      ])
+      return result.trim()
+    }
+
     // Ready issues
     let readyCount = 0
     try {
-      const ready = (await $`lb ready --json`.quiet().text()).trim()
+      const ready = await lbWithTimeout(["ready", "--json"])
       if (ready && ready !== "[]") {
         const parsed = JSON.parse(ready)
         readyCount = Array.isArray(parsed) ? parsed.length : 0
@@ -189,9 +210,7 @@ export async function getLbContext(
     // In-progress issues
     let inProgressCount = 0
     try {
-      const inProgress = (
-        await $`lb list --status in_progress --json`.quiet().text()
-      ).trim()
+      const inProgress = await lbWithTimeout(["list", "--status", "in_progress", "--json", "--no-sync"])
       if (inProgress && inProgress !== "[]") {
         const parsed = JSON.parse(inProgress)
         inProgressCount = Array.isArray(parsed) ? parsed.length : 0

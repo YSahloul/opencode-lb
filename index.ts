@@ -105,10 +105,12 @@ export const LbPlugin: Plugin = async ({ client, $ }) => {
   emitter.on("agent:aborted", async () => { await sound("Funk.aiff") })
   emitter.on("agent:closed", async () => { await sound("Glass.aiff") })
 
-  // Reconstruct state from tmux + lb on startup
+  // Reconstruct state from tmux + lb local cache on startup (--no-sync: no API calls)
   await reconstructRegistry($, registry)
 
   const injectedSessions = new Set<string>()
+  let lastIdleSync = 0
+  const IDLE_SYNC_COOLDOWN_MS = 10 * 60 * 1000 // 10 minutes
 
   return {
     // ── Tools ──────────────────────────────────────────────────────────
@@ -265,9 +267,13 @@ export const LbPlugin: Plugin = async ({ client, $ }) => {
         } catch {}
       }
 
-      // On session idle, poll background agents and sync
+      // On session idle, poll background agents and sync (with cooldown)
       if (event.type === "session.idle") {
-        await pollBackgroundAgents($, client, registry, emitter)
+        const now = Date.now()
+        if (now - lastIdleSync >= IDLE_SYNC_COOLDOWN_MS) {
+          lastIdleSync = now
+          await pollBackgroundAgents($, client, registry, emitter)
+        }
       }
     },
 
@@ -324,8 +330,18 @@ async function pollBackgroundAgents(
     }
   }
 
-  // Sync lb quietly
+  // Sync lb quietly — with timeout to prevent zombie processes
   try {
-    await $`lb sync`.quiet()
+    const syncProc = Bun.spawn(["lb", "sync"], {
+      stdout: "ignore",
+      stderr: "ignore",
+      env: { ...process.env, LB_TIMEOUT_MS: "30000" },
+    })
+    await Promise.race([
+      syncProc.exited,
+      new Promise<void>((resolve) => {
+        setTimeout(() => { syncProc.kill(); resolve() }, 30000)
+      }),
+    ])
   } catch {}
 }

@@ -524,10 +524,24 @@ export async function reconstructRegistry(
   registry: AgentRegistry,
 ): Promise<void> {
   try {
-    // Get all in-progress issues from lb
-    const issuesJson = (
-      await $`lb list --status in_progress --json`.quiet().text()
-    ).trim()
+    // Get all in-progress issues from lb (--no-sync: read local cache only, don't hit Linear API)
+    // Use Bun.spawn with timeout to prevent zombie processes on startup
+    const proc = Bun.spawn(["lb", "list", "--status", "in_progress", "--json", "--no-sync"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, LB_TIMEOUT_MS: "10000" },
+    })
+    const issuesJson = await Promise.race([
+      proc.exited.then(async () => {
+        return new TextDecoder().decode(await new Response(proc.stdout).arrayBuffer()).trim()
+      }),
+      new Promise<string>((resolve) => {
+        setTimeout(() => {
+          proc.kill()
+          resolve("")
+        }, 10000)
+      }),
+    ])
     if (!issuesJson || issuesJson === "[]") return
 
     const issues = JSON.parse(issuesJson) as any[]
