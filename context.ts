@@ -66,25 +66,66 @@ Goes straight to \`todo_bug\` → visible in \`lb ready\` immediately.
 
 **Create bugs IMMEDIATELY when you discover them. Do not wait. Do not ask permission.**
 
-### Doing Work
+### CRITICAL: All Coding Happens in Worktrees — NEVER on Main
+
+> **You MUST NEVER write code, edit files, or make commits directly on the main/master branch.**
+> **Every issue gets its own worktree with its own branch. No exceptions.**
+>
+> The main session is a **coordinator** — it claims issues and creates worktrees.
+> Worktree sessions do the actual implementation.
+
+### Coding Workflow (Coordinator — Main Session)
 
 1. \`lb ready\` → pick an issue
 2. \`lb show ID\` → read the full description
 3. \`lb update ID --status in_progress\` → claim it
-4. Do the work
-5. \`lb update ID --status in_review\` → when PR is opened or work is done
-6. \`lb sync\` → before ending session
+4. **Create a worktree** — this is MANDATORY before any coding:
+   \`\`\`bash
+   lb worktree create ID-short-description
+   \`\`\`
+   This automatically: creates a git worktree as a sibling directory, creates a new branch, copies .env files, installs dependencies or symlinks node_modules, symlinks .opencode/ and .claude/, runs \`lb init\` + \`lb sync\`.
+5. A new agent session opens in the worktree — it handles the implementation
+6. The worktree agent opens a PR, then: \`lb update ID --status in_review\`
+7. Clean up when finished:
+   \`\`\`bash
+   lb worktree delete ID-short-description
+   \`\`\`
+8. Human merges → \`lb update ID --status done\`
 
-### Worktree Sessions
+**If you are the main session and you catch yourself editing code: STOP. Create a worktree first.**
+
+### Worktree Sessions (When You ARE in a Worktree)
 
 If your branch name starts with an issue ID (e.g. \`AGE-99-fix-auth\`), you are a **worktree agent**.
+Your job is to implement that specific issue. Follow these steps:
 
-1. \`lb sync\`
-2. Extract issue ID from branch name
-3. \`lb show ID\` → read the issue
-4. \`lb update ID --status in_progress\`
-5. Implement the work
-6. Open PR, then \`lb update ID --status in_review\`
+1. \`lb sync\` — pull all issues from Linear
+2. Extract the issue ID from your branch name (e.g. \`AGE-99\` from \`AGE-99-fix-auth\`)
+3. \`lb show ID\` → read the full issue description
+4. \`lb update ID --status in_progress\` → claim it
+5. **Implement the work.** You are in a worktree — code freely here.
+6. Commit, push, open a PR to main
+7. \`lb update ID --status in_review\`
+8. \`lb sync\`
+
+### Worktree Management
+
+\`\`\`bash
+# Create a worktree (MANDATORY before any coding)
+lb worktree create AGE-42-fix-auth
+
+# Create from a specific base branch
+lb worktree create AGE-42-fix-auth --base develop
+
+# List active worktrees
+lb worktree list
+
+# Remove a worktree (checks for uncommitted/unpushed work)
+lb worktree delete AGE-42-fix-auth
+
+# Force remove (skip safety checks)
+lb worktree delete AGE-42-fix-auth --force
+\`\`\`
 
 ### Planning (SUBISSUES, NOT BUILT-IN TODOS)
 
@@ -138,23 +179,27 @@ Tools for parallel background agents:
 | \`lb create "Title" --parent ID\` | Create subtask |
 | \`lb create "Title" --discovered-from ID\` | Create bug (goes to \`todo_bug\`) |
 | \`lb update ID --status <s>\` | Update status |
+| \`lb update ID --status done\` | Mark complete |
 | \`lb update ID --label name\` | Add label |
-| \`lb close ID --reason "why"\` | Mark done |
 | \`lb dep add ID --blocks OTHER\` | Add dependency |
 | \`lb dep tree ID\` | Show dependency tree |
-| \`lb worktree create BRANCH\` | Create worktree |
-| \`lb worktree delete BRANCH\` | Remove worktree |
+| \`lb worktree create BRANCH\` | **MANDATORY before coding** — create worktree + branch |
+| \`lb worktree delete BRANCH\` | Remove worktree (after PR merged) |
+| \`lb worktree list\` | Show active worktrees |
 | \`lb list --status <s>\` | Filter issues |
 
 ### Rules
 
-1. **NEVER use built-in todo tools** — only \`lb\`. No exceptions.
-2. **Always \`lb sync\` then \`lb ready\`** at session start.
-3. **Always \`lb show ID\`** before starting work.
-4. **Create bug issues immediately** — use \`--discovered-from\`.
-5. **Set \`in_review\` when opening a PR**, not \`done\`.
-6. **Always \`lb sync\`** before ending a session.
-7. **Memory is ephemeral.** Offload everything to \`lb\` tickets — decisions, context, blockers, checkpoints. \`lb\` is your persistent brain.
+1. **NEVER code on main/master** — always create a worktree with \`lb worktree create\` first. The main session is a coordinator, not an implementer.
+2. **NEVER use built-in todo tools** — only \`lb\`. No exceptions.
+3. **Always \`lb sync\` then \`lb ready\`** at session start.
+4. **Always \`lb show ID\`** before starting work.
+5. **Always \`lb worktree create\`** before writing any code — every issue gets its own branch in a parallel worktree.
+6. **Create bug issues immediately** — use \`--discovered-from\`.
+7. **Set \`in_review\` when opening a PR.**
+8. **Set \`done\` when work is complete** — PR merged, issue fully resolved. Run \`lb update ID --status done\`.
+9. **Always \`lb sync\`** before ending a session.
+10. **Memory is ephemeral.** Offload everything to \`lb\` tickets — decisions, context, blockers, checkpoints. \`lb\` is your persistent brain.
 
 </lb-guidance>`
 
